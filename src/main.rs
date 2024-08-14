@@ -65,27 +65,43 @@ impl BinaryClsEvaluator {
 
     /// Calculates the confusion matrix.
     fn calculate_confusion_matrix(&self) -> Result<(usize, usize, usize, usize), PolarsError> {
-        let y_true = self.pred_df.column("ground_truth")?.i32()?;
-        let y_pred = self.pred_df.column("pred_label")?.i32()?;
+        let confusion_matrix = self
+            .pred_df
+            .clone()
+            .lazy()
+            .with_columns([
+                col("ground_truth")
+                    .eq(lit(true))
+                    .and(col("pred_label").eq(lit(true)))
+                    .alias("tp"),
+                col("ground_truth")
+                    .eq(lit(false))
+                    .and(col("pred_label").eq(lit(false)))
+                    .alias("tn"),
+                col("ground_truth")
+                    .eq(lit(false))
+                    .and(col("pred_label").eq(lit(true)))
+                    .alias("fp"),
+                col("ground_truth")
+                    .eq(lit(true))
+                    .and(col("pred_label").eq(lit(false)))
+                    .alias("fn"),
+            ])
+            .select([
+                col("tp").sum(),
+                col("tn").sum(),
+                col("fp").sum(),
+                col("fn").sum(),
+            ])
+            .collect()?;
 
-        let mut tp = 0;
-        let mut tn = 0;
-        let mut fp = 0;
-        let mut fn_ = 0;
-
-        for (true_label, pred_label) in y_true.into_iter().zip(y_pred.into_iter()) {
-            match (true_label, pred_label) {
-                (Some(1), Some(1)) => tp += 1,
-                (Some(0), Some(0)) => tn += 1,
-                (Some(0), Some(1)) => fp += 1,
-                (Some(1), Some(0)) => fn_ += 1,
-                _ => {}
-            }
-        }
+        let tp = confusion_matrix.column("tp")?.sum::<i64>().unwrap_or(0) as usize;
+        let tn = confusion_matrix.column("tn")?.sum::<i64>().unwrap_or(0) as usize;
+        let fp = confusion_matrix.column("fp")?.sum::<i64>().unwrap_or(0) as usize;
+        let fn_ = confusion_matrix.column("fn")?.sum::<i64>().unwrap_or(0) as usize;
 
         Ok((tp, tn, fp, fn_))
     }
-
     /// Calculates precision, recall, and F1 score.
     fn calculate_precision_recall_f1(&self) -> Result<(f64, f64, f64), PolarsError> {
         let (tp, _, fp, fn_) = self.calculate_confusion_matrix()?;
@@ -122,6 +138,89 @@ impl BinaryClsEvaluator {
             numerator / denominator.sqrt()
         };
         Ok(mcc)
+    }
+    fn calculate_auroc(&self) -> Result<f64, Box<dyn Error>> {
+        // Extract ground truth and prediction scores
+        let ground_truth = self.pred_df.column("ground_truth")?.i64()?;
+        let pred_scores = self.pred_df.column("pred_score")?.f64()?;
+
+        // Collect data into vectors
+        let mut data: Vec<(f64, bool)> = ground_truth
+            .into_iter()
+            .zip(pred_scores.into_iter())
+            .filter_map(|(gt, score)| {
+                if let (Some(gt), Some(score)) = (gt, score) {
+                    Some((score, gt == 1)) // Convert i64 to bool: 1 is true, everything else is false
+                } else {
+                    None
+                }
+            })
+            .collect();
+
+        // Sort by prediction score in descending order
+        data.sort_by(|a, b| b.0.partial_cmp(&a.0).unwrap_or(std::cmp::Ordering::Equal));
+
+        let mut auc = 0.0;
+        let mut true_positives = 0;
+        let mut false_positives = 0;
+        let total_positives = data.iter().filter(|&&(_, gt)| gt).count();
+        let total_negatives = data.len() - total_positives;
+
+        if total_positives == 0 || total_negatives == 0 {
+            return Ok(0.5); // AUROC is undefined, return 0.5
+        }
+
+        let mut prev_tpr = 0.0;
+        let mut prev_fpr = 0.0;
+
+        for (_, is_positive) in data {
+            if is_positive {
+                true_positives += 1;
+            } else {
+                false_positives += 1;
+            }
+
+            let tpr = true_positives as f64 / total_positives as f64;
+            let fpr = false_positives as f64 / total_negatives as f64;
+
+            // Calculate trapezoid area
+            auc += (fpr - prev_fpr) * (tpr + prev_tpr) / 2.0;
+
+            prev_tpr = tpr;
+            prev_fpr = fpr;
+        }
+
+        Ok(auc)
+    }
+    fn main() -> Result<(), Box<dyn Error>> {
+        let mut evaluator =
+            BinaryClsEvaluator::new(r#"C:\Users\msmin\code\perf_eval\tests\sample_pred_file.csv"#)?;
+        evaluator.set_pred_label()?;
+
+        enable_raw_mode()?;
+        let mut stdout = std::io::stdout();
+        execute!(stdout, EnableMouseCapture)?;
+        let backend = CrosstermBackend::new(stdout);
+        let mut terminal = Terminal::new(backend)?;
+
+        // Draw the UI
+        draw_ui(&mut terminal, &evaluator)?;
+
+        // Wait for a key press to exit
+        loop {
+            if let Event::Key(key) = event::read()? {
+                if key.code == KeyCode::Char('q') {
+                    break;
+                }
+            }
+        }
+
+        // Restore the terminal
+        disable_raw_mode()?;
+        execute!(terminal.backend_mut(), DisableMouseCapture)?;
+        terminal.show_cursor()?;
+
+        Ok(())
     }
 }
 
@@ -216,29 +315,25 @@ fn main() -> Result<(), Box<dyn Error>> {
     let mut evaluator =
         BinaryClsEvaluator::new(r#"C:\Users\msmin\code\perf_eval\tests\sample_pred_file.csv"#)?;
     evaluator.set_pred_label()?;
+    evaluator.calculate_confusion_matrix()?;
 
-    enable_raw_mode()?;
-    let mut stdout = std::io::stdout();
-    execute!(stdout, EnableMouseCapture)?;
-    let backend = CrosstermBackend::new(stdout);
-    let mut terminal = Terminal::new(backend)?;
+    let (precision, recall, f1_score) = evaluator.calculate_precision_recall_f1()?;
+    println!(
+        "Precision: {:.2}, Recall: {:.2}, F1 Score: {:.2}",
+        precision, recall, f1_score
+    );
 
-    // Draw the UI
-    draw_ui(&mut terminal, &evaluator)?;
+    let accuracy = evaluator.calculate_accuracy()?;
+    println!("Accuracy: {:.2}", accuracy);
 
-    // Wait for a key press to exit
-    loop {
-        if let Event::Key(key) = event::read()? {
-            if key.code == KeyCode::Char('q') {
-                break;
-            }
-        }
-    }
+    let specificity = evaluator.calculate_specificity()?;
+    println!("Specificity: {:.2}", specificity);
 
-    // Restore the terminal
-    disable_raw_mode()?;
-    execute!(terminal.backend_mut(), DisableMouseCapture)?;
-    terminal.show_cursor()?;
+    let mcc = evaluator.calculate_mcc()?;
+    println!("MCC: {:.2}", mcc);
+
+    let auroc = evaluator.calculate_auroc()?;
+    println!("AUROC: {:.2}", auroc);
 
     Ok(())
 }
