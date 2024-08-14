@@ -1,18 +1,21 @@
-use crossterm::event::{self, DisableMouseCapture, EnableMouseCapture, Event, KeyCode};
-use crossterm::execute;
-use crossterm::terminal::{disable_raw_mode, enable_raw_mode};
-use crossterm::terminal::{Clear, ClearType};
+use crossterm::event::{DisableMouseCapture, EnableMouseCapture};
+use crossterm::{
+    event::{self, Event, KeyCode},
+    execute,
+    terminal::{self, Clear, ClearType, EnterAlternateScreen, LeaveAlternateScreen},
+};
 use polars::prelude::*;
 use ratatui::{
     backend::{Backend, CrosstermBackend},
     layout::{Constraint, Direction, Layout},
-    style::{Modifier, Style},
+    style::{Color, Modifier, Style},
     text::{Line, Span, Text},
-    widgets::{Block, Borders, Cell, Paragraph, Row, Table},
+    widgets::{Block, Borders, Cell, Gauge, Paragraph, Row, Table},
     Terminal,
 };
 use std::error::Error;
 use std::io::stdout;
+
 /// A struct for evaluating binary classification models.
 struct BinaryClsEvaluator {
     pred_df: DataFrame,
@@ -58,6 +61,11 @@ impl BinaryClsEvaluator {
             .collect()?;
 
         Ok(())
+    }
+
+    pub fn set_threshold(&mut self, threshold: f64) -> Result<(), PolarsError> {
+        self.threshold = threshold;
+        self.set_pred_label()
     }
 
     /// Calculates the confusion matrix.
@@ -189,129 +197,270 @@ impl BinaryClsEvaluator {
 
         Ok(auc)
     }
+    fn classification_report(&self) -> Result<String, Box<dyn Error>> {
+        let (tp, tn, fp, fn_) = self.calculate_confusion_matrix()?;
+        let (precision, recall, f1_score) = self.calculate_precision_recall_f1()?;
+        let accuracy = self.calculate_accuracy()?;
+
+        let support_0 = tn + fp;
+        let support_1 = tp + fn_;
+        let total_support = support_0 + support_1;
+
+        let precision_0 = tn as f64 / (tn + fn_) as f64;
+        let recall_0 = tn as f64 / (tn + fp) as f64;
+        let f1_score_0 = 2.0 * (precision_0 * recall_0) / (precision_0 + recall_0);
+
+        let macro_precision = (precision + precision_0) / 2.0;
+        let macro_recall = (recall + recall_0) / 2.0;
+        let macro_f1 = (f1_score + f1_score_0) / 2.0;
+
+        let weighted_precision =
+            (precision * support_1 as f64 + precision_0 * support_0 as f64) / total_support as f64;
+        let weighted_recall =
+            (recall * support_1 as f64 + recall_0 * support_0 as f64) / total_support as f64;
+        let weighted_f1 =
+            (f1_score * support_1 as f64 + f1_score_0 * support_0 as f64) / total_support as f64;
+
+        let report = format!(
+            "              precision    recall  f1-score   support\n\n\
+             0             {:.2}      {:.2}     {:.2}        {}\n\
+             1             {:.2}      {:.2}     {:.2}        {}\n\n\
+             accuracy                         {:.2}        {}\n\
+             macro avg     {:.2}      {:.2}     {:.2}        {}\n\
+             weighted avg  {:.2}      {:.2}     {:.2}        {}",
+            precision_0,
+            recall_0,
+            f1_score_0,
+            support_0,
+            precision,
+            recall,
+            f1_score,
+            support_1,
+            accuracy,
+            total_support,
+            macro_precision,
+            macro_recall,
+            macro_f1,
+            total_support,
+            weighted_precision,
+            weighted_recall,
+            weighted_f1,
+            total_support
+        );
+
+        Ok(report)
+    }
 }
 
 fn draw_ui<B: Backend>(
     terminal: &mut Terminal<B>,
-    evaluator: &BinaryClsEvaluator,
+    evaluator: &mut BinaryClsEvaluator,
 ) -> Result<(), Box<dyn Error>> {
-    // Clear the terminal before drawing
-    execute!(stdout(), Clear(ClearType::All))?;
+    let mut threshold = 0.5;
 
+    // Initial calculation of metrics
+    evaluator.set_threshold(threshold)?;
+    let mut metrics = calculate_metrics(evaluator)?;
+
+    loop {
+        terminal.draw(|f| {
+            let size = f.area();
+            let chunks = Layout::default()
+                .direction(Direction::Vertical)
+                .margin(1)
+                .constraints(
+                    [
+                        Constraint::Length(3),
+                        Constraint::Percentage(15),
+                        Constraint::Percentage(25),
+                        Constraint::Percentage(60),
+                    ]
+                    .as_ref(),
+                )
+                .split(size);
+
+            // Threshold selector
+            let gauge = Gauge::default()
+                .block(
+                    Block::default()
+                        .borders(Borders::ALL)
+                        .title("Threshold Selector"),
+                )
+                .gauge_style(Style::default().fg(Color::Yellow))
+                .ratio(threshold)
+                .label(format!("{:.2}", threshold));
+            f.render_widget(gauge, chunks[0]);
+
+            // Confusion Matrix
+            let confusion_matrix = Table::new(
+                vec![
+                    Row::new(vec![
+                        Cell::from(""),
+                        Cell::from("Predicted 0"),
+                        Cell::from("Predicted 1"),
+                    ]),
+                    Row::new(vec![
+                        Cell::from("Actual 0"),
+                        Cell::from(format!("{}", metrics.tn)),
+                        Cell::from(format!("{}", metrics.fp)),
+                    ]),
+                    Row::new(vec![
+                        Cell::from("Actual 1"),
+                        Cell::from(format!("{}", metrics.fn_)),
+                        Cell::from(format!("{}", metrics.tp)),
+                    ]),
+                ],
+                [
+                    Constraint::Percentage(33),
+                    Constraint::Percentage(33),
+                    Constraint::Percentage(34),
+                ]
+                .as_ref(),
+            )
+            .block(
+                Block::default()
+                    .borders(Borders::ALL)
+                    .title("Confusion Matrix"),
+            );
+            f.render_widget(confusion_matrix, chunks[1]);
+
+            // Metrics
+            let metrics_text = vec![
+                Line::from(Span::styled(
+                    format!("Precision: {:.4}", metrics.precision),
+                    Style::default().add_modifier(Modifier::BOLD),
+                )),
+                Line::from(Span::styled(
+                    format!("Recall: {:.4}", metrics.recall),
+                    Style::default().add_modifier(Modifier::BOLD),
+                )),
+                Line::from(Span::styled(
+                    format!("F1 Score: {:.4}", metrics.f1_score),
+                    Style::default().add_modifier(Modifier::BOLD),
+                )),
+                Line::from(Span::styled(
+                    format!("Accuracy: {:.4}", metrics.accuracy),
+                    Style::default().add_modifier(Modifier::BOLD),
+                )),
+                Line::from(Span::styled(
+                    format!("Specificity: {:.4}", metrics.specificity),
+                    Style::default().add_modifier(Modifier::BOLD),
+                )),
+                Line::from(Span::styled(
+                    format!("MCC: {:.4}", metrics.mcc),
+                    Style::default().add_modifier(Modifier::BOLD),
+                )),
+                Line::from(Span::styled(
+                    format!("AUROC: {:.4}", metrics.auroc),
+                    Style::default().add_modifier(Modifier::BOLD),
+                )),
+            ];
+            let metrics_paragraph = Paragraph::new(Text::from(metrics_text))
+                .block(Block::default().borders(Borders::ALL).title("Metrics"))
+                .wrap(ratatui::widgets::Wrap { trim: true });
+            f.render_widget(metrics_paragraph, chunks[2]);
+
+            // Classification Report
+            let report_paragraph =
+                Paragraph::new(Text::from(metrics.classification_report.clone()))
+                    .block(
+                        Block::default()
+                            .borders(Borders::ALL)
+                            .title("Classification Report"),
+                    )
+                    .wrap(ratatui::widgets::Wrap { trim: true });
+            f.render_widget(report_paragraph, chunks[3]);
+        })?;
+
+        if let Event::Key(key) = event::read()? {
+            match key.code {
+                KeyCode::Char('q') => break,
+                KeyCode::Left => {
+                    let new_threshold = (threshold - 0.01).max(0.0);
+                    if new_threshold != threshold {
+                        threshold = new_threshold;
+                        evaluator.set_threshold(threshold)?;
+                        metrics = calculate_metrics(evaluator)?;
+                    }
+                }
+                KeyCode::Right => {
+                    let new_threshold = (threshold + 0.01).min(1.0);
+                    if new_threshold != threshold {
+                        threshold = new_threshold;
+                        evaluator.set_threshold(threshold)?;
+                        metrics = calculate_metrics(evaluator)?;
+                    }
+                }
+                _ => {}
+            }
+        }
+    }
+
+    Ok(())
+}
+
+// Struct to hold all metrics
+struct Metrics {
+    tp: usize,
+    tn: usize,
+    fp: usize,
+    fn_: usize,
+    precision: f64,
+    recall: f64,
+    f1_score: f64,
+    accuracy: f64,
+    specificity: f64,
+    mcc: f64,
+    auroc: f64,
+    classification_report: String,
+}
+
+// Helper function to calculate all metrics
+fn calculate_metrics(evaluator: &BinaryClsEvaluator) -> Result<Metrics, Box<dyn Error>> {
     let (tp, tn, fp, fn_) = evaluator.calculate_confusion_matrix()?;
     let (precision, recall, f1_score) = evaluator.calculate_precision_recall_f1()?;
     let accuracy = evaluator.calculate_accuracy()?;
     let specificity = evaluator.calculate_specificity()?;
     let mcc = evaluator.calculate_mcc()?;
     let auroc = evaluator.calculate_auroc()?;
+    let classification_report = evaluator.classification_report()?;
 
-    terminal.draw(|f| {
-        let size = f.area();
-        let chunks = Layout::default()
-            .direction(Direction::Vertical)
-            .margin(1)
-            .constraints([Constraint::Percentage(30), Constraint::Percentage(70)].as_ref())
-            .split(size);
-
-        let confusion_matrix = Table::new(
-            vec![
-                Row::new(vec![
-                    Cell::from(""),
-                    Cell::from("Predicted 0"),
-                    Cell::from("Predicted 1"),
-                ]),
-                Row::new(vec![
-                    Cell::from("Actual 0"),
-                    Cell::from(format!("{}", tn)),
-                    Cell::from(format!("{}", fp)),
-                ]),
-                Row::new(vec![
-                    Cell::from("Actual 1"),
-                    Cell::from(format!("{}", fn_)),
-                    Cell::from(format!("{}", tp)),
-                ]),
-            ],
-            [
-                Constraint::Percentage(33),
-                Constraint::Percentage(33),
-                Constraint::Percentage(34),
-            ]
-            .as_ref(),
-        )
-        .block(
-            Block::default()
-                .borders(Borders::ALL)
-                .title("Confusion Matrix"),
-        );
-
-        f.render_widget(confusion_matrix, chunks[0]);
-
-        let metrics = vec![
-            Line::from(Span::styled(
-                format!("Precision: {:.4}", precision),
-                Style::default().add_modifier(Modifier::BOLD),
-            )),
-            Line::from(Span::styled(
-                format!("Recall: {:.4}", recall),
-                Style::default().add_modifier(Modifier::BOLD),
-            )),
-            Line::from(Span::styled(
-                format!("F1 Score: {:.4}", f1_score),
-                Style::default().add_modifier(Modifier::BOLD),
-            )),
-            Line::from(Span::styled(
-                format!("Accuracy: {:.4}", accuracy),
-                Style::default().add_modifier(Modifier::BOLD),
-            )),
-            Line::from(Span::styled(
-                format!("Specificity: {:.4}", specificity),
-                Style::default().add_modifier(Modifier::BOLD),
-            )),
-            Line::from(Span::styled(
-                format!("MCC: {:.4}", mcc),
-                Style::default().add_modifier(Modifier::BOLD),
-            )),
-            Line::from(Span::styled(
-                format!("AUROC: {:.4}", auroc),
-                Style::default().add_modifier(Modifier::BOLD),
-            )),
-        ];
-
-        let metrics_paragraph = Paragraph::new(Text::from(metrics))
-            .block(Block::default().borders(Borders::ALL).title("Metrics"))
-            .wrap(ratatui::widgets::Wrap { trim: true });
-
-        f.render_widget(metrics_paragraph, chunks[1]);
-    })?;
-
-    Ok(())
+    Ok(Metrics {
+        tp,
+        tn,
+        fp,
+        fn_,
+        precision,
+        recall,
+        f1_score,
+        accuracy,
+        specificity,
+        mcc,
+        auroc,
+        classification_report,
+    })
 }
 fn main() -> Result<(), Box<dyn Error>> {
     let mut evaluator =
         BinaryClsEvaluator::new(r#"C:\Users\msmin\code\perf_eval\tests\sample_pred_file.csv"#)?;
-    evaluator.set_pred_label()?;
+    evaluator.set_threshold(0.5)?;
 
-    enable_raw_mode()?;
-    let mut stdout = std::io::stdout();
-    execute!(stdout, EnableMouseCapture)?;
+    terminal::enable_raw_mode()?;
+    let mut stdout = stdout();
+    execute!(stdout, EnterAlternateScreen, EnableMouseCapture)?;
     let backend = CrosstermBackend::new(stdout);
     let mut terminal = Terminal::new(backend)?;
 
     // Draw the UI
-    draw_ui(&mut terminal, &evaluator)?;
-
-    // Wait for a key press to exit
-    loop {
-        if let Event::Key(key) = event::read()? {
-            if key.code == KeyCode::Char('q') {
-                break;
-            }
-        }
-    }
+    draw_ui(&mut terminal, &mut evaluator)?;
 
     // Restore the terminal
-    disable_raw_mode()?;
-    execute!(terminal.backend_mut(), DisableMouseCapture)?;
+    terminal::disable_raw_mode()?;
+    execute!(
+        terminal.backend_mut(),
+        LeaveAlternateScreen,
+        DisableMouseCapture
+    )?;
     terminal.show_cursor()?;
 
     Ok(())
