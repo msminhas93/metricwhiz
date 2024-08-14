@@ -1,0 +1,10 @@
+[package]
+name = "metricwhiz"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+crossterm = "0.28.1"
+ndarray = "0.16.0"
+polars = { version = "0.41.3", features = ["csv", "lazy"] }
+ratatui = "0.28.0"
