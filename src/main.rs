@@ -225,12 +225,12 @@ impl BinaryClsEvaluator {
             (f1_score * support_1 as f64 + f1_score_0 * support_0 as f64) / total_support as f64;
 
         let report = format!(
-            "              precision    recall  f1-score   support\n\n\
-             0             {:.2}      {:.2}     {:.2}        {}\n\
-             1             {:.2}      {:.2}     {:.2}        {}\n\n\
-             accuracy                         {:.2}        {}\n\
-             macro avg     {:.2}      {:.2}     {:.2}        {}\n\
-             weighted avg  {:.2}      {:.2}     {:.2}        {}",
+            "⠀⠀⠀          precision   recall  f1-score   support\n\n\
+             0             {:.3}      {:.3}     {:.3}       {}\n\
+             1             {:.3}      {:.3}     {:.3}       {}\n\n\
+             accuracy                           {:.3}       {}\n\
+             macro avg     {:.3}      {:.3}     {:.3}       {}\n\
+             weighted avg  {:.3}      {:.3}     {:.3}       {}",
             precision_0,
             recall_0,
             f1_score_0,
@@ -291,36 +291,71 @@ impl BinaryClsEvaluator {
         let original_threshold = self.threshold;
 
         let mut optimal = OptimalThresholds {
-            precision: (0.0, f64::NEG_INFINITY),
-            recall: (0.0, f64::NEG_INFINITY),
-            f1_score: (0.0, f64::NEG_INFINITY),
-            accuracy: (0.0, f64::NEG_INFINITY),
-            specificity: (0.0, f64::NEG_INFINITY),
-            mcc: (0.0, f64::NEG_INFINITY),
+            precision: OptimalMetric {
+                threshold: 0.0,
+                value: f64::NEG_INFINITY,
+            },
+            recall: OptimalMetric {
+                threshold: 0.0,
+                value: f64::NEG_INFINITY,
+            },
+            f1_score: OptimalMetric {
+                threshold: 0.0,
+                value: f64::NEG_INFINITY,
+            },
+            accuracy: OptimalMetric {
+                threshold: 0.0,
+                value: f64::NEG_INFINITY,
+            },
+            specificity: OptimalMetric {
+                threshold: 0.0,
+                value: f64::NEG_INFINITY,
+            },
+            mcc: OptimalMetric {
+                threshold: 0.0,
+                value: f64::NEG_INFINITY,
+            },
         };
 
         for &threshold in &thresholds {
             self.set_threshold(threshold)?;
             let metrics = self.calculate_metrics()?;
 
-            // Update optimal thresholds...
-            if metrics.precision > optimal.precision.1 {
-                optimal.precision = (threshold, metrics.precision);
+            if metrics.precision > optimal.precision.value {
+                optimal.precision = OptimalMetric {
+                    threshold,
+                    value: metrics.precision,
+                };
             }
-            if metrics.recall > optimal.recall.1 {
-                optimal.recall = (threshold, metrics.recall);
+            if metrics.recall > optimal.recall.value {
+                optimal.recall = OptimalMetric {
+                    threshold,
+                    value: metrics.recall,
+                };
             }
-            if metrics.f1_score > optimal.f1_score.1 {
-                optimal.f1_score = (threshold, metrics.f1_score);
+            if metrics.f1_score > optimal.f1_score.value {
+                optimal.f1_score = OptimalMetric {
+                    threshold,
+                    value: metrics.f1_score,
+                };
             }
-            if metrics.accuracy > optimal.accuracy.1 {
-                optimal.accuracy = (threshold, metrics.accuracy);
+            if metrics.accuracy > optimal.accuracy.value {
+                optimal.accuracy = OptimalMetric {
+                    threshold,
+                    value: metrics.accuracy,
+                };
             }
-            if metrics.specificity > optimal.specificity.1 {
-                optimal.specificity = (threshold, metrics.specificity);
+            if metrics.specificity > optimal.specificity.value {
+                optimal.specificity = OptimalMetric {
+                    threshold,
+                    value: metrics.specificity,
+                };
             }
-            if metrics.mcc > optimal.mcc.1 {
-                optimal.mcc = (threshold, metrics.mcc);
+            if metrics.mcc > optimal.mcc.value {
+                optimal.mcc = OptimalMetric {
+                    threshold,
+                    value: metrics.mcc,
+                };
             }
         }
 
@@ -331,14 +366,20 @@ impl BinaryClsEvaluator {
     }
 }
 
-#[derive(Default)]
+#[derive(Debug, Default)]
 pub struct OptimalThresholds {
-    precision: (f64, f64),
-    recall: (f64, f64),
-    f1_score: (f64, f64),
-    accuracy: (f64, f64),
-    specificity: (f64, f64),
-    mcc: (f64, f64),
+    pub precision: OptimalMetric,
+    pub recall: OptimalMetric,
+    pub f1_score: OptimalMetric,
+    pub accuracy: OptimalMetric,
+    pub specificity: OptimalMetric,
+    pub mcc: OptimalMetric,
+}
+
+#[derive(Debug, Default, Clone, Copy)]
+pub struct OptimalMetric {
+    pub threshold: f64,
+    pub value: f64,
 }
 
 // Struct to hold all metrics
@@ -470,43 +511,44 @@ pub fn draw_ui<B: Backend>(
             let optimal_text = vec![
                 Line::from(Span::styled(
                     format!(
-                        "Precision: {:.3} (value: {:.4})",
-                        optimal_thresholds.precision.0, optimal_thresholds.precision.1
+                        "Optimal Precision: {:.4} (Threshold: {:.4})",
+                        optimal_thresholds.precision.value, optimal_thresholds.precision.threshold
                     ),
                     Style::default().add_modifier(Modifier::BOLD),
                 )),
                 Line::from(Span::styled(
                     format!(
-                        "Recall: {:.3} (value: {:.4})",
-                        optimal_thresholds.recall.0, optimal_thresholds.recall.1
+                        "Optimal Recall: {:.4} (Threshold: {:.4})",
+                        optimal_thresholds.recall.value, optimal_thresholds.recall.threshold
                     ),
                     Style::default().add_modifier(Modifier::BOLD),
                 )),
                 Line::from(Span::styled(
                     format!(
-                        "F1 Score: {:.3} (value: {:.4})",
-                        optimal_thresholds.f1_score.0, optimal_thresholds.f1_score.1
+                        "Optimal F1 Score: {:.4} (Threshold: {:.4})",
+                        optimal_thresholds.f1_score.value, optimal_thresholds.f1_score.threshold
                     ),
                     Style::default().add_modifier(Modifier::BOLD),
                 )),
                 Line::from(Span::styled(
                     format!(
-                        "Accuracy: {:.3} (value: {:.4})",
-                        optimal_thresholds.accuracy.0, optimal_thresholds.accuracy.1
+                        "Optimal Accuracy: {:.4} (Threshold: {:.4})",
+                        optimal_thresholds.accuracy.value, optimal_thresholds.accuracy.threshold
                     ),
                     Style::default().add_modifier(Modifier::BOLD),
                 )),
                 Line::from(Span::styled(
                     format!(
-                        "Specificity: {:.3} (value: {:.4})",
-                        optimal_thresholds.specificity.0, optimal_thresholds.specificity.1
+                        "Optimal Specificity: {:.4} (Threshold: {:.4})",
+                        optimal_thresholds.specificity.value,
+                        optimal_thresholds.specificity.threshold
                     ),
                     Style::default().add_modifier(Modifier::BOLD),
                 )),
                 Line::from(Span::styled(
                     format!(
-                        "MCC: {:.3} (value: {:.4})",
-                        optimal_thresholds.mcc.0, optimal_thresholds.mcc.1
+                        "Optimal MCC: {:.4} (Threshold: {:.4})",
+                        optimal_thresholds.mcc.value, optimal_thresholds.mcc.threshold
                     ),
                     Style::default().add_modifier(Modifier::BOLD),
                 )),
@@ -577,7 +619,7 @@ fn main() -> Result<(), Box<dyn Error>> {
     execute!(
         terminal.backend_mut(),
         LeaveAlternateScreen,
-        // DisableMouseCapture
+        DisableMouseCapture
     )?;
     terminal.show_cursor()?;
 
