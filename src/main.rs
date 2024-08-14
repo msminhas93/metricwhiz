@@ -65,9 +65,10 @@ impl BinaryClsEvaluator {
         Ok(())
     }
 
-    pub fn set_threshold(&mut self, threshold: f64) -> Result<(), PolarsError> {
-        self.threshold = threshold;
-        self.set_pred_label()
+    pub fn set_threshold(&mut self, threshold: f64) -> Result<(), Box<dyn Error>> {
+        self.threshold = (threshold * 100.0).round() / 100.0;
+        self.set_pred_label()?;
+        Ok(())
     }
 
     /// Calculates the confusion matrix.
@@ -252,65 +253,120 @@ impl BinaryClsEvaluator {
 
         Ok(report)
     }
+    pub fn calculate_metrics(&mut self) -> Result<Metrics, Box<dyn Error>> {
+        let threshold_key = (self.threshold * 100.0).round() as i64;
+
+        if !self.metrics_cache.contains_key(&threshold_key) {
+            let (tp, tn, fp, fn_) = self.calculate_confusion_matrix()?;
+            let (precision, recall, f1_score) = self.calculate_precision_recall_f1()?;
+            let accuracy = self.calculate_accuracy()?;
+            let specificity = self.calculate_specificity()?;
+            let mcc = self.calculate_mcc()?;
+            let auroc = self.calculate_auroc()?;
+            let classification_report = self.classification_report()?;
+
+            let metrics = Metrics {
+                tp,
+                tn,
+                fp,
+                fn_,
+                precision,
+                recall,
+                f1_score,
+                accuracy,
+                specificity,
+                mcc,
+                auroc,
+                classification_report,
+            };
+
+            self.metrics_cache.insert(threshold_key, metrics);
+        }
+
+        Ok(self.metrics_cache.get(&threshold_key).unwrap().clone())
+    }
+
+    pub fn calculate_optimal_thresholds(&mut self) -> Result<OptimalThresholds, Box<dyn Error>> {
+        let thresholds: Vec<f64> = (1..99).map(|i| i as f64 / 100.0).collect();
+        let original_threshold = self.threshold;
+
+        let mut optimal = OptimalThresholds {
+            precision: (0.0, f64::NEG_INFINITY),
+            recall: (0.0, f64::NEG_INFINITY),
+            f1_score: (0.0, f64::NEG_INFINITY),
+            accuracy: (0.0, f64::NEG_INFINITY),
+            specificity: (0.0, f64::NEG_INFINITY),
+            mcc: (0.0, f64::NEG_INFINITY),
+        };
+
+        for &threshold in &thresholds {
+            self.set_threshold(threshold)?;
+            let metrics = self.calculate_metrics()?;
+
+            // Update optimal thresholds...
+            if metrics.precision > optimal.precision.1 {
+                optimal.precision = (threshold, metrics.precision);
+            }
+            if metrics.recall > optimal.recall.1 {
+                optimal.recall = (threshold, metrics.recall);
+            }
+            if metrics.f1_score > optimal.f1_score.1 {
+                optimal.f1_score = (threshold, metrics.f1_score);
+            }
+            if metrics.accuracy > optimal.accuracy.1 {
+                optimal.accuracy = (threshold, metrics.accuracy);
+            }
+            if metrics.specificity > optimal.specificity.1 {
+                optimal.specificity = (threshold, metrics.specificity);
+            }
+            if metrics.mcc > optimal.mcc.1 {
+                optimal.mcc = (threshold, metrics.mcc);
+            }
+        }
+
+        // Restore the original threshold
+        self.set_threshold(original_threshold)?;
+
+        Ok(optimal)
+    }
+}
+
+#[derive(Default)]
+pub struct OptimalThresholds {
+    precision: (f64, f64),
+    recall: (f64, f64),
+    f1_score: (f64, f64),
+    accuracy: (f64, f64),
+    specificity: (f64, f64),
+    mcc: (f64, f64),
 }
 
 // Struct to hold all metrics
-struct Metrics {
-    tp: usize,
-    tn: usize,
-    fp: usize,
-    fn_: usize,
-    precision: f64,
-    recall: f64,
-    f1_score: f64,
-    accuracy: f64,
-    specificity: f64,
-    mcc: f64,
-    auroc: f64,
-    classification_report: String,
-}
-
-// Helper function to calculate all metrics
-fn calculate_metrics(evaluator: &mut BinaryClsEvaluator) -> Result<&Metrics, Box<dyn Error>> {
-    let threshold_key = (evaluator.threshold * 100.0) as i64;
-
-    if !evaluator.metrics_cache.contains_key(&threshold_key) {
-        let (tp, tn, fp, fn_) = evaluator.calculate_confusion_matrix()?;
-        let (precision, recall, f1_score) = evaluator.calculate_precision_recall_f1()?;
-        let accuracy = evaluator.calculate_accuracy()?;
-        let specificity = evaluator.calculate_specificity()?;
-        let mcc = evaluator.calculate_mcc()?;
-        let auroc = evaluator.calculate_auroc()?;
-        let classification_report = evaluator.classification_report()?;
-
-        let metrics = Metrics {
-            tp,
-            tn,
-            fp,
-            fn_,
-            precision,
-            recall,
-            f1_score,
-            accuracy,
-            specificity,
-            mcc,
-            auroc,
-            classification_report,
-        };
-
-        evaluator.metrics_cache.insert(threshold_key, metrics);
-    }
-
-    Ok(evaluator.metrics_cache.get(&threshold_key).unwrap())
+#[derive(Clone)]
+pub struct Metrics {
+    pub tp: usize,
+    pub tn: usize,
+    pub fp: usize,
+    pub fn_: usize,
+    pub precision: f64,
+    pub recall: f64,
+    pub f1_score: f64,
+    pub accuracy: f64,
+    pub specificity: f64,
+    pub mcc: f64,
+    pub auroc: f64,
+    pub classification_report: String,
 }
 
 pub fn draw_ui<B: Backend>(
     terminal: &mut Terminal<B>,
     evaluator: &mut BinaryClsEvaluator,
 ) -> Result<(), Box<dyn Error>> {
+    let mut optimal_thresholds = evaluator.calculate_optimal_thresholds()?;
+
     loop {
         let threshold = evaluator.threshold;
-        let metrics = calculate_metrics(evaluator)?;
+        let metrics = evaluator.calculate_metrics()?;
 
         terminal.draw(|f| {
             let size = f.area();
@@ -321,8 +377,9 @@ pub fn draw_ui<B: Backend>(
                     [
                         Constraint::Length(3),
                         Constraint::Percentage(15),
-                        Constraint::Percentage(25),
-                        Constraint::Percentage(60),
+                        Constraint::Percentage(20),
+                        Constraint::Percentage(20),
+                        Constraint::Percentage(45),
                     ]
                     .as_ref(),
                 )
@@ -335,7 +392,7 @@ pub fn draw_ui<B: Backend>(
                         .borders(Borders::ALL)
                         .title("Threshold Selector"),
                 )
-                .gauge_style(Style::default().fg(Color::LightMagenta))
+                .gauge_style(Style::default().fg(Color::Yellow))
                 .ratio(threshold)
                 .label(format!("{:.2}", threshold));
             f.render_widget(gauge, chunks[0]);
@@ -409,6 +466,60 @@ pub fn draw_ui<B: Backend>(
                 .wrap(ratatui::widgets::Wrap { trim: true });
             f.render_widget(metrics_paragraph, chunks[2]);
 
+            // Optimal Thresholds
+            let optimal_text = vec![
+                Line::from(Span::styled(
+                    format!(
+                        "Precision: {:.3} (value: {:.4})",
+                        optimal_thresholds.precision.0, optimal_thresholds.precision.1
+                    ),
+                    Style::default().add_modifier(Modifier::BOLD),
+                )),
+                Line::from(Span::styled(
+                    format!(
+                        "Recall: {:.3} (value: {:.4})",
+                        optimal_thresholds.recall.0, optimal_thresholds.recall.1
+                    ),
+                    Style::default().add_modifier(Modifier::BOLD),
+                )),
+                Line::from(Span::styled(
+                    format!(
+                        "F1 Score: {:.3} (value: {:.4})",
+                        optimal_thresholds.f1_score.0, optimal_thresholds.f1_score.1
+                    ),
+                    Style::default().add_modifier(Modifier::BOLD),
+                )),
+                Line::from(Span::styled(
+                    format!(
+                        "Accuracy: {:.3} (value: {:.4})",
+                        optimal_thresholds.accuracy.0, optimal_thresholds.accuracy.1
+                    ),
+                    Style::default().add_modifier(Modifier::BOLD),
+                )),
+                Line::from(Span::styled(
+                    format!(
+                        "Specificity: {:.3} (value: {:.4})",
+                        optimal_thresholds.specificity.0, optimal_thresholds.specificity.1
+                    ),
+                    Style::default().add_modifier(Modifier::BOLD),
+                )),
+                Line::from(Span::styled(
+                    format!(
+                        "MCC: {:.3} (value: {:.4})",
+                        optimal_thresholds.mcc.0, optimal_thresholds.mcc.1
+                    ),
+                    Style::default().add_modifier(Modifier::BOLD),
+                )),
+            ];
+            let optimal_paragraph = Paragraph::new(Text::from(optimal_text))
+                .block(
+                    Block::default()
+                        .borders(Borders::ALL)
+                        .title("Optimal Thresholds"),
+                )
+                .wrap(ratatui::widgets::Wrap { trim: true });
+            f.render_widget(optimal_paragraph, chunks[3]);
+
             // Classification Report
             let report_paragraph =
                 Paragraph::new(Text::from(metrics.classification_report.clone()))
@@ -418,23 +529,27 @@ pub fn draw_ui<B: Backend>(
                             .title("Classification Report"),
                     )
                     .wrap(ratatui::widgets::Wrap { trim: true });
-            f.render_widget(report_paragraph, chunks[3]);
+            f.render_widget(report_paragraph, chunks[4]);
         })?;
 
         if let Event::Key(key) = event::read()? {
             match key.code {
                 KeyCode::Char('q') => break,
                 KeyCode::Left => {
-                    let new_threshold = (evaluator.threshold - 0.01).max(0.0);
-                    if (new_threshold * 100.0).round() / 100.0 != evaluator.threshold {
+                    let new_threshold = (threshold - 0.01).max(0.0);
+                    if new_threshold != threshold {
                         evaluator.set_threshold(new_threshold)?;
                     }
                 }
                 KeyCode::Right => {
-                    let new_threshold = (evaluator.threshold + 0.01).min(1.0);
-                    if (new_threshold * 100.0).round() / 100.0 != evaluator.threshold {
+                    let new_threshold = (threshold + 0.01).min(1.0);
+                    if new_threshold != threshold {
                         evaluator.set_threshold(new_threshold)?;
                     }
+                }
+                KeyCode::Char('r') => {
+                    // Recalculate optimal thresholds
+                    optimal_thresholds = evaluator.calculate_optimal_thresholds()?;
                 }
                 _ => {}
             }
@@ -443,7 +558,6 @@ pub fn draw_ui<B: Backend>(
 
     Ok(())
 }
-
 fn main() -> Result<(), Box<dyn Error>> {
     let mut evaluator =
         BinaryClsEvaluator::new(r#"C:\Users\msmin\code\perf_eval\tests\sample_pred_file.csv"#)?;
@@ -463,7 +577,7 @@ fn main() -> Result<(), Box<dyn Error>> {
     execute!(
         terminal.backend_mut(),
         LeaveAlternateScreen,
-        DisableMouseCapture
+        // DisableMouseCapture
     )?;
     terminal.show_cursor()?;
 
