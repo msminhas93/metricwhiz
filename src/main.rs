@@ -1,8 +1,8 @@
 use crossterm::event::{self, DisableMouseCapture, EnableMouseCapture, Event, KeyCode};
 use crossterm::execute;
 use crossterm::terminal::{disable_raw_mode, enable_raw_mode};
+use crossterm::terminal::{Clear, ClearType};
 use polars::prelude::*;
-
 use ratatui::{
     backend::{Backend, CrosstermBackend},
     layout::{Constraint, Direction, Layout},
@@ -12,6 +12,7 @@ use ratatui::{
     Terminal,
 };
 use std::error::Error;
+use std::io::stdout;
 /// A struct for evaluating binary classification models.
 struct BinaryClsEvaluator {
     pred_df: DataFrame,
@@ -34,8 +35,7 @@ impl BinaryClsEvaluator {
                 "The CSV file must contain 'pred_score' and 'ground_truth' columns.".into(),
             );
         }
-        // Print the first 5 rows of the DataFrame
-        println!("DataFrame head:\n{}", pred_df.head(Some(5)));
+
         Ok(BinaryClsEvaluator {
             pred_df,
             threshold: 0.5,
@@ -56,9 +56,6 @@ impl BinaryClsEvaluator {
                     .alias("pred_label"),
             )
             .collect()?;
-
-        // Print the first 5 rows of the updated DataFrame
-        println!("Updated DataFrame head:\n{}", self.pred_df.head(Some(5)));
 
         Ok(())
     }
@@ -192,47 +189,21 @@ impl BinaryClsEvaluator {
 
         Ok(auc)
     }
-    fn main() -> Result<(), Box<dyn Error>> {
-        let mut evaluator =
-            BinaryClsEvaluator::new(r#"C:\Users\msmin\code\perf_eval\tests\sample_pred_file.csv"#)?;
-        evaluator.set_pred_label()?;
-
-        enable_raw_mode()?;
-        let mut stdout = std::io::stdout();
-        execute!(stdout, EnableMouseCapture)?;
-        let backend = CrosstermBackend::new(stdout);
-        let mut terminal = Terminal::new(backend)?;
-
-        // Draw the UI
-        draw_ui(&mut terminal, &evaluator)?;
-
-        // Wait for a key press to exit
-        loop {
-            if let Event::Key(key) = event::read()? {
-                if key.code == KeyCode::Char('q') {
-                    break;
-                }
-            }
-        }
-
-        // Restore the terminal
-        disable_raw_mode()?;
-        execute!(terminal.backend_mut(), DisableMouseCapture)?;
-        terminal.show_cursor()?;
-
-        Ok(())
-    }
 }
 
 fn draw_ui<B: Backend>(
     terminal: &mut Terminal<B>,
     evaluator: &BinaryClsEvaluator,
 ) -> Result<(), Box<dyn Error>> {
+    // Clear the terminal before drawing
+    execute!(stdout(), Clear(ClearType::All))?;
+
     let (tp, tn, fp, fn_) = evaluator.calculate_confusion_matrix()?;
     let (precision, recall, f1_score) = evaluator.calculate_precision_recall_f1()?;
     let accuracy = evaluator.calculate_accuracy()?;
     let specificity = evaluator.calculate_specificity()?;
     let mcc = evaluator.calculate_mcc()?;
+    let auroc = evaluator.calculate_auroc()?;
 
     terminal.draw(|f| {
         let size = f.area();
@@ -263,7 +234,7 @@ fn draw_ui<B: Backend>(
             [
                 Constraint::Percentage(33),
                 Constraint::Percentage(33),
-                Constraint::Percentage(33),
+                Constraint::Percentage(34),
             ]
             .as_ref(),
         )
@@ -275,65 +246,73 @@ fn draw_ui<B: Backend>(
 
         f.render_widget(confusion_matrix, chunks[0]);
 
-        let metrics = Text::from(vec![
+        let metrics = vec![
             Line::from(Span::styled(
-                format!("Precision: {:.2}", precision),
+                format!("Precision: {:.4}", precision),
                 Style::default().add_modifier(Modifier::BOLD),
             )),
             Line::from(Span::styled(
-                format!("Recall: {:.2}", recall),
+                format!("Recall: {:.4}", recall),
                 Style::default().add_modifier(Modifier::BOLD),
             )),
             Line::from(Span::styled(
-                format!("F1 Score: {:.2}", f1_score),
+                format!("F1 Score: {:.4}", f1_score),
                 Style::default().add_modifier(Modifier::BOLD),
             )),
             Line::from(Span::styled(
-                format!("Accuracy: {:.2}", accuracy),
+                format!("Accuracy: {:.4}", accuracy),
                 Style::default().add_modifier(Modifier::BOLD),
             )),
             Line::from(Span::styled(
-                format!("Specificity: {:.2}", specificity),
+                format!("Specificity: {:.4}", specificity),
                 Style::default().add_modifier(Modifier::BOLD),
             )),
             Line::from(Span::styled(
-                format!("MCC: {:.2}", mcc),
+                format!("MCC: {:.4}", mcc),
                 Style::default().add_modifier(Modifier::BOLD),
             )),
-        ]);
+            Line::from(Span::styled(
+                format!("AUROC: {:.4}", auroc),
+                Style::default().add_modifier(Modifier::BOLD),
+            )),
+        ];
 
-        let metrics_paragraph = Paragraph::new(metrics)
+        let metrics_paragraph = Paragraph::new(Text::from(metrics))
             .block(Block::default().borders(Borders::ALL).title("Metrics"))
             .wrap(ratatui::widgets::Wrap { trim: true });
 
         f.render_widget(metrics_paragraph, chunks[1]);
     })?;
+
     Ok(())
 }
-
 fn main() -> Result<(), Box<dyn Error>> {
     let mut evaluator =
         BinaryClsEvaluator::new(r#"C:\Users\msmin\code\perf_eval\tests\sample_pred_file.csv"#)?;
     evaluator.set_pred_label()?;
-    evaluator.calculate_confusion_matrix()?;
 
-    let (precision, recall, f1_score) = evaluator.calculate_precision_recall_f1()?;
-    println!(
-        "Precision: {:.2}, Recall: {:.2}, F1 Score: {:.2}",
-        precision, recall, f1_score
-    );
+    enable_raw_mode()?;
+    let mut stdout = std::io::stdout();
+    execute!(stdout, EnableMouseCapture)?;
+    let backend = CrosstermBackend::new(stdout);
+    let mut terminal = Terminal::new(backend)?;
 
-    let accuracy = evaluator.calculate_accuracy()?;
-    println!("Accuracy: {:.2}", accuracy);
+    // Draw the UI
+    draw_ui(&mut terminal, &evaluator)?;
 
-    let specificity = evaluator.calculate_specificity()?;
-    println!("Specificity: {:.2}", specificity);
+    // Wait for a key press to exit
+    loop {
+        if let Event::Key(key) = event::read()? {
+            if key.code == KeyCode::Char('q') {
+                break;
+            }
+        }
+    }
 
-    let mcc = evaluator.calculate_mcc()?;
-    println!("MCC: {:.2}", mcc);
-
-    let auroc = evaluator.calculate_auroc()?;
-    println!("AUROC: {:.2}", auroc);
+    // Restore the terminal
+    disable_raw_mode()?;
+    execute!(terminal.backend_mut(), DisableMouseCapture)?;
+    terminal.show_cursor()?;
 
     Ok(())
 }
