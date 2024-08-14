@@ -2,7 +2,7 @@ use crossterm::event::{DisableMouseCapture, EnableMouseCapture};
 use crossterm::{
     event::{self, Event, KeyCode},
     execute,
-    terminal::{self, Clear, ClearType, EnterAlternateScreen, LeaveAlternateScreen},
+    terminal::{self, EnterAlternateScreen, LeaveAlternateScreen},
 };
 use polars::prelude::*;
 use ratatui::{
@@ -16,12 +16,13 @@ use ratatui::{
 use std::error::Error;
 use std::io::stdout;
 
-/// A struct for evaluating binary classification models.
-struct BinaryClsEvaluator {
+use std::collections::BTreeMap;
+
+pub struct BinaryClsEvaluator {
     pred_df: DataFrame,
     threshold: f64,
+    metrics_cache: BTreeMap<i64, Metrics>,
 }
-
 impl BinaryClsEvaluator {
     /// Creates a new `BinaryClsEvaluator` from a CSV file.
     fn new(pred_file_path: &str) -> Result<Self, Box<dyn Error>> {
@@ -42,6 +43,7 @@ impl BinaryClsEvaluator {
         Ok(BinaryClsEvaluator {
             pred_df,
             threshold: 0.5,
+            metrics_cache: BTreeMap::new(),
         })
     }
 
@@ -252,17 +254,64 @@ impl BinaryClsEvaluator {
     }
 }
 
-fn draw_ui<B: Backend>(
+// Struct to hold all metrics
+struct Metrics {
+    tp: usize,
+    tn: usize,
+    fp: usize,
+    fn_: usize,
+    precision: f64,
+    recall: f64,
+    f1_score: f64,
+    accuracy: f64,
+    specificity: f64,
+    mcc: f64,
+    auroc: f64,
+    classification_report: String,
+}
+
+// Helper function to calculate all metrics
+fn calculate_metrics(evaluator: &mut BinaryClsEvaluator) -> Result<&Metrics, Box<dyn Error>> {
+    let threshold_key = (evaluator.threshold * 100.0) as i64;
+
+    if !evaluator.metrics_cache.contains_key(&threshold_key) {
+        let (tp, tn, fp, fn_) = evaluator.calculate_confusion_matrix()?;
+        let (precision, recall, f1_score) = evaluator.calculate_precision_recall_f1()?;
+        let accuracy = evaluator.calculate_accuracy()?;
+        let specificity = evaluator.calculate_specificity()?;
+        let mcc = evaluator.calculate_mcc()?;
+        let auroc = evaluator.calculate_auroc()?;
+        let classification_report = evaluator.classification_report()?;
+
+        let metrics = Metrics {
+            tp,
+            tn,
+            fp,
+            fn_,
+            precision,
+            recall,
+            f1_score,
+            accuracy,
+            specificity,
+            mcc,
+            auroc,
+            classification_report,
+        };
+
+        evaluator.metrics_cache.insert(threshold_key, metrics);
+    }
+
+    Ok(evaluator.metrics_cache.get(&threshold_key).unwrap())
+}
+
+pub fn draw_ui<B: Backend>(
     terminal: &mut Terminal<B>,
     evaluator: &mut BinaryClsEvaluator,
 ) -> Result<(), Box<dyn Error>> {
-    let mut threshold = 0.5;
-
-    // Initial calculation of metrics
-    evaluator.set_threshold(threshold)?;
-    let mut metrics = calculate_metrics(evaluator)?;
-
     loop {
+        let threshold = evaluator.threshold;
+        let metrics = calculate_metrics(evaluator)?;
+
         terminal.draw(|f| {
             let size = f.area();
             let chunks = Layout::default()
@@ -286,7 +335,7 @@ fn draw_ui<B: Backend>(
                         .borders(Borders::ALL)
                         .title("Threshold Selector"),
                 )
-                .gauge_style(Style::default().fg(Color::Yellow))
+                .gauge_style(Style::default().fg(Color::LightMagenta))
                 .ratio(threshold)
                 .label(format!("{:.2}", threshold));
             f.render_widget(gauge, chunks[0]);
@@ -376,19 +425,15 @@ fn draw_ui<B: Backend>(
             match key.code {
                 KeyCode::Char('q') => break,
                 KeyCode::Left => {
-                    let new_threshold = (threshold - 0.01).max(0.0);
-                    if new_threshold != threshold {
-                        threshold = new_threshold;
-                        evaluator.set_threshold(threshold)?;
-                        metrics = calculate_metrics(evaluator)?;
+                    let new_threshold = (evaluator.threshold - 0.01).max(0.0);
+                    if (new_threshold * 100.0).round() / 100.0 != evaluator.threshold {
+                        evaluator.set_threshold(new_threshold)?;
                     }
                 }
                 KeyCode::Right => {
-                    let new_threshold = (threshold + 0.01).min(1.0);
-                    if new_threshold != threshold {
-                        threshold = new_threshold;
-                        evaluator.set_threshold(threshold)?;
-                        metrics = calculate_metrics(evaluator)?;
+                    let new_threshold = (evaluator.threshold + 0.01).min(1.0);
+                    if (new_threshold * 100.0).round() / 100.0 != evaluator.threshold {
+                        evaluator.set_threshold(new_threshold)?;
                     }
                 }
                 _ => {}
@@ -399,47 +444,6 @@ fn draw_ui<B: Backend>(
     Ok(())
 }
 
-// Struct to hold all metrics
-struct Metrics {
-    tp: usize,
-    tn: usize,
-    fp: usize,
-    fn_: usize,
-    precision: f64,
-    recall: f64,
-    f1_score: f64,
-    accuracy: f64,
-    specificity: f64,
-    mcc: f64,
-    auroc: f64,
-    classification_report: String,
-}
-
-// Helper function to calculate all metrics
-fn calculate_metrics(evaluator: &BinaryClsEvaluator) -> Result<Metrics, Box<dyn Error>> {
-    let (tp, tn, fp, fn_) = evaluator.calculate_confusion_matrix()?;
-    let (precision, recall, f1_score) = evaluator.calculate_precision_recall_f1()?;
-    let accuracy = evaluator.calculate_accuracy()?;
-    let specificity = evaluator.calculate_specificity()?;
-    let mcc = evaluator.calculate_mcc()?;
-    let auroc = evaluator.calculate_auroc()?;
-    let classification_report = evaluator.classification_report()?;
-
-    Ok(Metrics {
-        tp,
-        tn,
-        fp,
-        fn_,
-        precision,
-        recall,
-        f1_score,
-        accuracy,
-        specificity,
-        mcc,
-        auroc,
-        classification_report,
-    })
-}
 fn main() -> Result<(), Box<dyn Error>> {
     let mut evaluator =
         BinaryClsEvaluator::new(r#"C:\Users\msmin\code\perf_eval\tests\sample_pred_file.csv"#)?;
