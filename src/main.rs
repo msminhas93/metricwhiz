@@ -83,24 +83,17 @@ impl App {
         if let Event::Key(key) = event::read()? {
             match key.code {
                 KeyCode::Char('q') | KeyCode::Esc => self.quit(),
-                _ => {
+                KeyCode::Char('p') => self.previous_tab(),
+                KeyCode::Char('n') => self.next_tab(),
+                KeyCode::Left | KeyCode::Right => {
                     if self.selected_tab == SelectedTab::ReportViewer {
                         self.handle_threshold_events(key.code);
-                    } else {
-                        self.handle_tab_navigation(key.code);
                     }
                 }
+                _ => {}
             }
         }
         Ok(())
-    }
-
-    fn handle_tab_navigation(&mut self, key: KeyCode) {
-        match key {
-            KeyCode::Char('n') | KeyCode::Right => self.next_tab(),
-            KeyCode::Char('p') | KeyCode::Left => self.previous_tab(),
-            _ => {}
-        }
     }
 
     fn handle_threshold_events(&mut self, key: KeyCode) {
@@ -195,21 +188,21 @@ impl App {
         // Confusion Matrix
         let confusion_matrix = Table::new(
             vec![
-                Row::new(vec![
-                    Cell::from(""),
-                    Cell::from("Predicted 0"),
-                    Cell::from("Predicted 1"),
-                ]),
-                Row::new(vec![
-                    Cell::from("Actual 0"),
-                    Cell::from(format!("{}", metrics.tn)),
-                    Cell::from(format!("{}", metrics.fp)),
-                ]),
-                Row::new(vec![
-                    Cell::from("Actual 1"),
-                    Cell::from(format!("{}", metrics.fn_)),
-                    Cell::from(format!("{}", metrics.tp)),
-                ]),
+            Row::new(vec![
+                Cell::from(""),
+                Cell::from("Predicted 0"),
+                Cell::from("Predicted 1"),
+            ]),
+            Row::new(vec![
+                Cell::from("Actual 0"),
+                Cell::from(format!("{}", metrics.tn)),
+                Cell::from(format!("{}", metrics.fp)),
+            ]),
+            Row::new(vec![
+                Cell::from("Actual 1"),
+                Cell::from(format!("{}", metrics.fn_)),
+                Cell::from(format!("{}", metrics.tp)),
+            ]),
             ],
             [
                 Constraint::Percentage(33),
