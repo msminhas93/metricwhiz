@@ -147,6 +147,7 @@ impl App {
 
         let threshold = self.evaluator.threshold;
         let metrics = self.evaluator.calculate_metrics().unwrap();
+        let optimal_thresholds = self.evaluator.calculate_optimal_thresholds().unwrap();
 
         // Threshold selector
         let gauge = Gauge::default()
@@ -163,21 +164,21 @@ impl App {
         // Confusion Matrix
         let confusion_matrix = Table::new(
             vec![
-                Row::new(vec![
-                    Cell::from(""),
-                    Cell::from("Predicted 0"),
-                    Cell::from("Predicted 1"),
-                ]),
-                Row::new(vec![
-                    Cell::from("Actual 0"),
-                    Cell::from(format!("{}", metrics.tn)),
-                    Cell::from(format!("{}", metrics.fp)),
-                ]),
-                Row::new(vec![
-                    Cell::from("Actual 1"),
-                    Cell::from(format!("{}", metrics.fn_)),
-                    Cell::from(format!("{}", metrics.tp)),
-                ]),
+            Row::new(vec![
+                Cell::from(""),
+                Cell::from("Predicted 0"),
+                Cell::from("Predicted 1"),
+            ]),
+            Row::new(vec![
+                Cell::from("Actual 0"),
+                Cell::from(format!("{}", metrics.tn)),
+                Cell::from(format!("{}", metrics.fp)),
+            ]),
+            Row::new(vec![
+                Cell::from("Actual 1"),
+                Cell::from(format!("{}", metrics.fn_)),
+                Cell::from(format!("{}", metrics.tp)),
+            ]),
             ],
             [
                 Constraint::Percentage(33),
@@ -228,6 +229,70 @@ impl App {
             .block(Block::default().borders(Borders::ALL).title("Metrics"))
             .wrap(ratatui::widgets::Wrap { trim: true });
         f.render_widget(metrics_paragraph, chunks[2]);
+
+        // Optimal Thresholds
+        let optimal_text = vec![
+            Line::from(Span::styled(
+                format!(
+                    "Optimal Precision: {:.4} (Threshold: {:.4})",
+                    optimal_thresholds.precision.value, optimal_thresholds.precision.threshold
+                ),
+                Style::default().add_modifier(Modifier::BOLD),
+            )),
+            Line::from(Span::styled(
+                format!(
+                    "Optimal Recall: {:.4} (Threshold: {:.4})",
+                    optimal_thresholds.recall.value, optimal_thresholds.recall.threshold
+                ),
+                Style::default().add_modifier(Modifier::BOLD),
+            )),
+            Line::from(Span::styled(
+                format!(
+                    "Optimal F1 Score: {:.4} (Threshold: {:.4})",
+                    optimal_thresholds.f1_score.value, optimal_thresholds.f1_score.threshold
+                ),
+                Style::default().add_modifier(Modifier::BOLD),
+            )),
+            Line::from(Span::styled(
+                format!(
+                    "Optimal Accuracy: {:.4} (Threshold: {:.4})",
+                    optimal_thresholds.accuracy.value, optimal_thresholds.accuracy.threshold
+                ),
+                Style::default().add_modifier(Modifier::BOLD),
+            )),
+            Line::from(Span::styled(
+                format!(
+                    "Optimal Specificity: {:.4} (Threshold: {:.4})",
+                    optimal_thresholds.specificity.value, optimal_thresholds.specificity.threshold
+                ),
+                Style::default().add_modifier(Modifier::BOLD),
+            )),
+            Line::from(Span::styled(
+                format!(
+                    "Optimal MCC: {:.4} (Threshold: {:.4})",
+                    optimal_thresholds.mcc.value, optimal_thresholds.mcc.threshold
+                ),
+                Style::default().add_modifier(Modifier::BOLD),
+            )),
+        ];
+        let optimal_paragraph = Paragraph::new(Text::from(optimal_text))
+            .block(
+                Block::default()
+                    .borders(Borders::ALL)
+                    .title("Optimal Thresholds"),
+            )
+            .wrap(ratatui::widgets::Wrap { trim: true });
+        f.render_widget(optimal_paragraph, chunks[3]);
+
+        // Classification Report
+        let report_paragraph = Paragraph::new(Text::from(metrics.classification_report.clone()))
+            .block(
+                Block::default()
+                    .borders(Borders::ALL)
+                    .title("Classification Report"),
+            )
+            .wrap(ratatui::widgets::Wrap { trim: true });
+        f.render_widget(report_paragraph, chunks[4]);
     }
 
     fn render_tab_1(&self, f: &mut ratatui::Frame, area: Rect) {
