@@ -53,7 +53,7 @@ enum AppState {
     Quitting,
 }
 
-#[derive(Clone, Copy, EnumIter, FromRepr, Debug)]
+#[derive(Clone, Copy, EnumIter, FromRepr, Debug, PartialEq)]
 enum SelectedTab {
     ReportViewer,
     SampleViewer,
@@ -82,13 +82,44 @@ impl App {
     fn handle_events(&mut self) -> std::io::Result<()> {
         if let Event::Key(key) = event::read()? {
             match key.code {
-                KeyCode::Char('n') | KeyCode::Right => self.next_tab(),
-                KeyCode::Char('p') | KeyCode::Left => self.previous_tab(),
                 KeyCode::Char('q') | KeyCode::Esc => self.quit(),
-                _ => {}
+                _ => {
+                    if self.selected_tab == SelectedTab::ReportViewer {
+                        self.handle_threshold_events(key.code);
+                    } else {
+                        self.handle_tab_navigation(key.code);
+                    }
+                }
             }
         }
         Ok(())
+    }
+
+    fn handle_tab_navigation(&mut self, key: KeyCode) {
+        match key {
+            KeyCode::Char('n') | KeyCode::Right => self.next_tab(),
+            KeyCode::Char('p') | KeyCode::Left => self.previous_tab(),
+            _ => {}
+        }
+    }
+
+    fn handle_threshold_events(&mut self, key: KeyCode) {
+        let threshold = self.evaluator.threshold;
+        match key {
+            KeyCode::Left => {
+                let new_threshold = (threshold - 0.01).max(0.0);
+                if new_threshold != threshold {
+                    self.evaluator.set_threshold(new_threshold).unwrap();
+                }
+            }
+            KeyCode::Right => {
+                let new_threshold = (threshold + 0.01).min(1.0);
+                if new_threshold != threshold {
+                    self.evaluator.set_threshold(new_threshold).unwrap();
+                }
+            }
+            _ => {}
+        }
     }
 
     fn next_tab(&mut self) {
@@ -164,21 +195,21 @@ impl App {
         // Confusion Matrix
         let confusion_matrix = Table::new(
             vec![
-            Row::new(vec![
-                Cell::from(""),
-                Cell::from("Predicted 0"),
-                Cell::from("Predicted 1"),
-            ]),
-            Row::new(vec![
-                Cell::from("Actual 0"),
-                Cell::from(format!("{}", metrics.tn)),
-                Cell::from(format!("{}", metrics.fp)),
-            ]),
-            Row::new(vec![
-                Cell::from("Actual 1"),
-                Cell::from(format!("{}", metrics.fn_)),
-                Cell::from(format!("{}", metrics.tp)),
-            ]),
+                Row::new(vec![
+                    Cell::from(""),
+                    Cell::from("Predicted 0"),
+                    Cell::from("Predicted 1"),
+                ]),
+                Row::new(vec![
+                    Cell::from("Actual 0"),
+                    Cell::from(format!("{}", metrics.tn)),
+                    Cell::from(format!("{}", metrics.fp)),
+                ]),
+                Row::new(vec![
+                    Cell::from("Actual 1"),
+                    Cell::from(format!("{}", metrics.fn_)),
+                    Cell::from(format!("{}", metrics.tp)),
+                ]),
             ],
             [
                 Constraint::Percentage(33),
