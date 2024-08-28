@@ -8,3 +8,4 @@ crossterm = "0.28.1"
 ndarray = "0.16.0"
 polars = { version = "0.41.3", features = ["csv", "lazy"] }
 ratatui = "0.28.0"
+strum = { version = "0.26.3", features = ["derive"] }

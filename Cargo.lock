@@ -609,6 +609,7 @@ dependencies = [
  "ndarray",
  "polars",
  "ratatui",
+ "strum",
 ]
 
 [[package]]
