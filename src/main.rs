@@ -57,6 +57,33 @@ struct Sample {
     text: String, // Add any other fields you need
 }
 
+#[derive(Clone, Copy, PartialEq, Eq, EnumIter, Debug)]
+enum SampleCategory {
+    TruePositive,
+    TrueNegative,
+    FalsePositive,
+    FalseNegative,
+}
+
+impl SampleCategory {
+    fn previous(self) -> Self {
+        let variants: Vec<SampleCategory> = SampleCategory::iter().collect();
+        let current_index = variants.iter().position(|&r| r == self).unwrap();
+        let previous_index = if current_index == 0 {
+            variants.len() - 1
+        } else {
+            current_index - 1
+        };
+        variants[previous_index]
+    }
+
+    fn next(self) -> Self {
+        let variants: Vec<SampleCategory> = SampleCategory::iter().collect();
+        let current_index = variants.iter().position(|&r| r == self).unwrap();
+        let next_index = (current_index + 1) % variants.len();
+        variants[next_index]
+    }
+}
 #[derive(Clone, Copy, EnumIter, FromRepr, Debug, PartialEq)]
 enum SelectedTab {
     ReportViewer,
@@ -68,6 +95,7 @@ struct App {
     selected_tab: SelectedTab,
     evaluator: BinaryClsEvaluator,
     sample_list_state: ListState,
+    selected_category: SampleCategory,
 }
 
 impl App {
@@ -77,6 +105,7 @@ impl App {
             selected_tab: SelectedTab::ReportViewer,
             evaluator,
             sample_list_state: ListState::default(),
+            selected_category: SampleCategory::FalsePositive,
         }
     }
 
@@ -320,18 +349,44 @@ impl App {
             .constraints([Constraint::Percentage(30), Constraint::Percentage(70)].as_ref())
             .split(area);
 
-        // Get filtered samples based on the selected category (tn, tp, fp, fn)
+        // Render the category selection dropdown
+        let categories = SampleCategory::iter()
+            .map(|category| ListItem::new(format!("{:?}", category)))
+            .collect::<Vec<_>>();
+
+        let category_list = List::new(categories)
+            .block(
+                Block::default()
+                    .borders(Borders::ALL)
+                    .title("Select Category"),
+            )
+            .highlight_style(
+                Style::default()
+                    .fg(Color::Yellow)
+                    .add_modifier(Modifier::BOLD),
+            )
+            .highlight_symbol(">>");
+
+        f.render_stateful_widget(category_list, chunks[0], &mut self.sample_list_state);
+
+        // Get filtered samples based on the selected category
+        let category_str = match self.selected_category {
+            SampleCategory::TruePositive => "tp",
+            SampleCategory::TrueNegative => "tn",
+            SampleCategory::FalsePositive => "fp",
+            SampleCategory::FalseNegative => "fn",
+        };
+
         let samples = self
-            .get_filtered_samples("tn")
+            .get_filtered_samples(category_str)
             .unwrap_or_else(|_| Vec::new());
 
-        // Create a list of sample identifiers for the left pane
-        let sample_list: Vec<ListItem> = samples
+        // Render the list of samples
+        let sample_list: Vec<_> = samples
             .iter()
             .map(|sample| ListItem::new(format!("{}: {}", sample.id, sample.text)))
             .collect();
 
-        // Render the list of samples
         let sample_list_widget = List::new(sample_list)
             .block(Block::default().borders(Borders::ALL).title("Samples"))
             .highlight_style(
@@ -367,11 +422,20 @@ impl App {
                 KeyCode::Char('n') => self.next_tab(),
                 KeyCode::Left | KeyCode::Right => {
                     if self.selected_tab == SelectedTab::ReportViewer {
+                        // Handle threshold adjustments in the ReportViewer tab
                         self.handle_threshold_events(key.code);
+                    } else if self.selected_tab == SelectedTab::SampleViewer {
+                        // Handle category selection in the SampleViewer tab
+                        if key.code == KeyCode::Left {
+                            self.previous_category();
+                        } else {
+                            self.next_category();
+                        }
                     }
                 }
                 KeyCode::Up | KeyCode::Down => {
                     if self.selected_tab == SelectedTab::SampleViewer {
+                        // Navigate through samples in the SampleViewer tab
                         if key.code == KeyCode::Up {
                             self.previous_sample();
                         } else {
@@ -383,6 +447,14 @@ impl App {
             }
         }
         Ok(())
+    }
+
+    fn previous_category(&mut self) {
+        self.selected_category = self.selected_category.previous();
+    }
+
+    fn next_category(&mut self) {
+        self.selected_category = self.selected_category.next();
     }
 
     fn previous_sample(&mut self) {
