@@ -27,7 +27,7 @@ fn main() -> Result<(), Box<dyn Error>> {
     let backend = CrosstermBackend::new(stdout);
     let mut terminal = Terminal::new(backend)?;
 
-    let mut evaluator = BinaryClsEvaluator::new(r#"sample_pred_file.csv"#)?;
+    let mut evaluator = BinaryClsEvaluator::new(r#"test\sample_pred_file.csv"#)?;
     evaluator.set_threshold(0.5)?;
 
     let app_result = App::new(evaluator).run(&mut terminal);
@@ -65,25 +65,6 @@ enum SampleCategory {
     FalseNegative,
 }
 
-impl SampleCategory {
-    fn previous(self) -> Self {
-        let variants: Vec<SampleCategory> = SampleCategory::iter().collect();
-        let current_index = variants.iter().position(|&r| r == self).unwrap();
-        let previous_index = if current_index == 0 {
-            variants.len() - 1
-        } else {
-            current_index - 1
-        };
-        variants[previous_index]
-    }
-
-    fn next(self) -> Self {
-        let variants: Vec<SampleCategory> = SampleCategory::iter().collect();
-        let current_index = variants.iter().position(|&r| r == self).unwrap();
-        let next_index = (current_index + 1) % variants.len();
-        variants[next_index]
-    }
-}
 #[derive(Clone, Copy, EnumIter, FromRepr, Debug, PartialEq)]
 enum SelectedTab {
     ReportViewer,
@@ -94,6 +75,7 @@ struct App {
     state: AppState,
     selected_tab: SelectedTab,
     evaluator: BinaryClsEvaluator,
+    category_list_state: ListState,
     sample_list_state: ListState,
     selected_category: SampleCategory,
 }
@@ -106,6 +88,7 @@ impl App {
             evaluator,
             sample_list_state: ListState::default(),
             selected_category: SampleCategory::FalsePositive,
+            category_list_state: ListState::default(),
         }
     }
 
@@ -346,7 +329,11 @@ impl App {
     fn render_tab_1(&mut self, f: &mut ratatui::Frame, area: Rect) {
         let chunks = Layout::default()
             .direction(ratatui::layout::Direction::Horizontal)
-            .constraints([Constraint::Percentage(30), Constraint::Percentage(70)].as_ref())
+            .constraints([
+                Constraint::Percentage(30), // For category selection
+                Constraint::Percentage(30), // For sample list
+                Constraint::Percentage(40), // For sample details
+            ])
             .split(area);
 
         // Render the category selection dropdown
@@ -367,7 +354,7 @@ impl App {
             )
             .highlight_symbol(">>");
 
-        f.render_stateful_widget(category_list, chunks[0], &mut self.sample_list_state);
+        f.render_stateful_widget(category_list, chunks[0], &mut self.category_list_state);
 
         // Get filtered samples based on the selected category
         let category_str = match self.selected_category {
@@ -395,10 +382,11 @@ impl App {
                     .add_modifier(Modifier::BOLD),
             )
             .highlight_symbol(">>");
-        f.render_stateful_widget(sample_list_widget, chunks[0], &mut self.sample_list_state);
+
+        f.render_stateful_widget(sample_list_widget, chunks[1], &mut self.sample_list_state);
 
         // Render the details of the selected sample in the right pane
-        if let Some(selected_sample) = self.get_selected_sample() {
+        if let Some(selected_sample) = self.get_selected_sample(category_str) {
             let sample_details = format!(
                 "Ground Truth: {}, Pred Label: {} \n\n{}",
                 selected_sample.ground_truth, selected_sample.pred_label, selected_sample.text
@@ -410,7 +398,7 @@ impl App {
                         .title("Sample Details"),
                 )
                 .wrap(ratatui::widgets::Wrap { trim: true });
-            f.render_widget(sample_paragraph, chunks[1]);
+            f.render_widget(sample_paragraph, chunks[2]);
         }
     }
 
@@ -425,7 +413,6 @@ impl App {
                         // Handle threshold adjustments in the ReportViewer tab
                         self.handle_threshold_events(key.code);
                     } else if self.selected_tab == SelectedTab::SampleViewer {
-                        // Handle category selection in the SampleViewer tab
                         if key.code == KeyCode::Left {
                             self.previous_category();
                         } else {
@@ -435,7 +422,6 @@ impl App {
                 }
                 KeyCode::Up | KeyCode::Down => {
                     if self.selected_tab == SelectedTab::SampleViewer {
-                        // Navigate through samples in the SampleViewer tab
                         if key.code == KeyCode::Up {
                             self.previous_sample();
                         } else {
@@ -450,11 +436,33 @@ impl App {
     }
 
     fn previous_category(&mut self) {
-        self.selected_category = self.selected_category.previous();
+        let i = match self.category_list_state.selected() {
+            Some(i) => {
+                if i == 0 {
+                    SampleCategory::iter().count() - 1
+                } else {
+                    i - 1
+                }
+            }
+            None => 0,
+        };
+        self.category_list_state.select(Some(i));
+        self.selected_category = SampleCategory::iter().nth(i).unwrap();
     }
 
     fn next_category(&mut self) {
-        self.selected_category = self.selected_category.next();
+        let i = match self.category_list_state.selected() {
+            Some(i) => {
+                if i >= SampleCategory::iter().count() - 1 {
+                    0
+                } else {
+                    i + 1
+                }
+            }
+            None => 0,
+        };
+        self.category_list_state.select(Some(i));
+        self.selected_category = SampleCategory::iter().nth(i).unwrap();
     }
 
     fn previous_sample(&mut self) {
@@ -490,9 +498,9 @@ impl App {
         self.sample_list_state.select(Some(i));
     }
 
-    fn get_selected_sample(&self) -> Option<Sample> {
+    fn get_selected_sample(&self, category: &str) -> Option<Sample> {
         self.sample_list_state.selected().and_then(|index| {
-            self.get_filtered_samples("tp")
+            self.get_filtered_samples(category)
                 .unwrap_or_else(|_| Vec::new())
                 .get(index)
                 .cloned()
