@@ -55,7 +55,7 @@ struct Sample {
     id: usize, // or whatever type your ID is
     ground_truth: i64,
     pred_label: i64,
-    details: String, // Add any other fields you need
+    text: String, // Add any other fields you need
 }
 
 #[derive(Clone, Copy, EnumIter, FromRepr, Debug, PartialEq)]
@@ -346,7 +346,7 @@ impl App {
         // Create a list of sample identifiers for the left pane
         let sample_list: Vec<ListItem> = samples
             .iter()
-            .map(|sample| ListItem::new(format!("Sample ID: {}", sample.id)))
+            .map(|sample| ListItem::new(format!("{}: {}", sample.id, sample.text)))
             .collect();
 
         // Render the list of samples
@@ -362,7 +362,7 @@ impl App {
 
         // Render the details of the selected sample in the right pane
         if let Some(selected_sample) = self.get_selected_sample() {
-            let sample_details = format!("Details:\n{}", selected_sample.details);
+            let sample_details = format!("Details:\n{}", selected_sample.text);
             let sample_paragraph = Paragraph::new(sample_details)
                 .block(
                     Block::default()
@@ -372,6 +372,39 @@ impl App {
                 .wrap(ratatui::widgets::Wrap { trim: true });
             f.render_widget(sample_paragraph, chunks[1]);
         }
+    }
+
+    fn previous_sample(&mut self) {
+        let i = match self.sample_list_state.selected() {
+            Some(i) => {
+                if i == 0 {
+                    self.sample_list_state.selected().unwrap_or(0)
+                } else {
+                    i - 1
+                }
+            }
+            None => 0,
+        };
+        self.sample_list_state.select(Some(i));
+    }
+
+    fn next_sample(&mut self) {
+        let i = match self.sample_list_state.selected() {
+            Some(i) => {
+                if i >= self
+                    .get_filtered_samples("tp")
+                    .unwrap_or_else(|_| Vec::new())
+                    .len()
+                    - 1
+                {
+                    i
+                } else {
+                    i + 1
+                }
+            }
+            None => 0,
+        };
+        self.sample_list_state.select(Some(i));
     }
 
     fn get_filtered_samples(&self, category: &str) -> Result<Vec<Sample>, PolarsError> {
@@ -436,10 +469,10 @@ impl App {
                     }
                 };
 
-                let details = match &row_buffer.0[2] {
+                let text = match &row_buffer.0[2] {
                     AnyValue::String(val) => val.to_string(),
                     _ => {
-                        eprintln!("Unexpected type for details in row {}", i);
+                        eprintln!("Unexpected type for text in row {}", i);
                         String::new() // Default value or handle error
                     }
                 };
@@ -448,7 +481,7 @@ impl App {
                     id: i,
                     ground_truth,
                     pred_label,
-                    details,
+                    text,
                 });
             } else {
                 eprintln!("Row {} does not have enough elements", i);
