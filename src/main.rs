@@ -1,3 +1,4 @@
+use clap::{Arg, Command};
 use crossterm::{
     event::{self, DisableMouseCapture, EnableMouseCapture, Event, KeyCode},
     execute,
@@ -16,10 +17,34 @@ use ratatui::{
     Terminal,
 };
 use std::error::Error;
+use std::fs;
 use std::io::stdout;
+use std::process;
 use strum::{EnumIter, FromRepr, IntoEnumIterator};
-
 fn main() -> Result<(), Box<dyn Error>> {
+    // Define the CLI using clap
+    let matches = Command::new("MetricWhiz")
+        .version("0.1")
+        .author("Manpreet Singh")
+        .about("Processes a prediction file")
+        .arg(
+            Arg::new("pred_file_path")
+                .help("The path to the prediction csv file. The file should have pred_score, ground_truth and text columns.")
+                .required(true)
+                .index(1),
+        )
+        .get_matches();
+
+    // Get the prediction file path from the arguments
+    let pred_file_path = matches
+        .get_one::<String>("pred_file_path")
+        .expect("Prediction file path is required");
+
+    // Check if the file exists
+    if !fs::metadata(pred_file_path).is_ok() {
+        eprintln!("Error: File '{}' does not exist.", pred_file_path);
+        process::exit(1);
+    }
     terminal::enable_raw_mode()?;
     let mut stdout = stdout();
     execute!(stdout, EnterAlternateScreen, EnableMouseCapture)?;
