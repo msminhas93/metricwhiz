@@ -27,8 +27,7 @@ fn main() -> Result<(), Box<dyn Error>> {
     let backend = CrosstermBackend::new(stdout);
     let mut terminal = Terminal::new(backend)?;
 
-    let mut evaluator =
-        BinaryClsEvaluator::new(r#"C:\Users\msmin\code\perf_eval\tests\sample_pred_file.csv"#)?;
+    let mut evaluator = BinaryClsEvaluator::new(r#"sample_pred_file.csv"#)?;
     evaluator.set_threshold(0.5)?;
 
     let app_result = App::new(evaluator).run(&mut terminal);
@@ -88,23 +87,6 @@ impl App {
         while self.state == AppState::Running {
             terminal.draw(|f| self.draw_ui(f))?;
             self.handle_events()?;
-        }
-        Ok(())
-    }
-
-    fn handle_events(&mut self) -> std::io::Result<()> {
-        if let Event::Key(key) = event::read()? {
-            match key.code {
-                KeyCode::Char('q') | KeyCode::Esc => self.quit(),
-                KeyCode::Char('p') => self.previous_tab(),
-                KeyCode::Char('n') => self.next_tab(),
-                KeyCode::Left | KeyCode::Right => {
-                    if self.selected_tab == SelectedTab::ReportViewer {
-                        self.handle_threshold_events(key.code);
-                    }
-                }
-                _ => {}
-            }
         }
         Ok(())
     }
@@ -340,7 +322,7 @@ impl App {
 
         // Get filtered samples based on the selected category (tn, tp, fp, fn)
         let samples = self
-            .get_filtered_samples("tp")
+            .get_filtered_samples("tn")
             .unwrap_or_else(|_| Vec::new());
 
         // Create a list of sample identifiers for the left pane
@@ -362,7 +344,10 @@ impl App {
 
         // Render the details of the selected sample in the right pane
         if let Some(selected_sample) = self.get_selected_sample() {
-            let sample_details = format!("Details:\n{}", selected_sample.text);
+            let sample_details = format!(
+                "Ground Truth: {}, Pred Label: {} \n\n{}",
+                selected_sample.ground_truth, selected_sample.pred_label, selected_sample.text
+            );
             let sample_paragraph = Paragraph::new(sample_details)
                 .block(
                     Block::default()
@@ -372,6 +357,32 @@ impl App {
                 .wrap(ratatui::widgets::Wrap { trim: true });
             f.render_widget(sample_paragraph, chunks[1]);
         }
+    }
+
+    fn handle_events(&mut self) -> std::io::Result<()> {
+        if let Event::Key(key) = event::read()? {
+            match key.code {
+                KeyCode::Char('q') | KeyCode::Esc => self.quit(),
+                KeyCode::Char('p') => self.previous_tab(),
+                KeyCode::Char('n') => self.next_tab(),
+                KeyCode::Left | KeyCode::Right => {
+                    if self.selected_tab == SelectedTab::ReportViewer {
+                        self.handle_threshold_events(key.code);
+                    }
+                }
+                KeyCode::Up | KeyCode::Down => {
+                    if self.selected_tab == SelectedTab::SampleViewer {
+                        if key.code == KeyCode::Up {
+                            self.previous_sample();
+                        } else {
+                            self.next_sample();
+                        }
+                    }
+                }
+                _ => {}
+            }
+        }
+        Ok(())
     }
 
     fn previous_sample(&mut self) {
@@ -405,6 +416,15 @@ impl App {
             None => 0,
         };
         self.sample_list_state.select(Some(i));
+    }
+
+    fn get_selected_sample(&self) -> Option<Sample> {
+        self.sample_list_state.selected().and_then(|index| {
+            self.get_filtered_samples("tp")
+                .unwrap_or_else(|_| Vec::new())
+                .get(index)
+                .cloned()
+        })
     }
 
     fn get_filtered_samples(&self, category: &str) -> Result<Vec<Sample>, PolarsError> {
@@ -489,15 +509,6 @@ impl App {
         }
 
         Ok(samples)
-    }
-
-    fn get_selected_sample(&self) -> Option<Sample> {
-        self.sample_list_state.selected().and_then(|index| {
-            self.get_filtered_samples("tp")
-                .unwrap_or_else(|_| Vec::new())
-                .get(index)
-                .cloned()
-        })
     }
 }
 
