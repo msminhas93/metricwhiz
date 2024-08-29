@@ -1,6 +1,8 @@
 use clap::{Arg, Command};
 use crossterm::{
-    event::{self, DisableMouseCapture, EnableMouseCapture, Event, KeyCode},
+    event::{
+        self, DisableMouseCapture, EnableMouseCapture, Event, KeyCode, KeyEvent, KeyEventKind,
+    },
     execute,
     terminal::{self, EnterAlternateScreen, LeaveAlternateScreen},
 };
@@ -52,7 +54,7 @@ fn main() -> Result<(), Box<dyn Error>> {
     let backend = CrosstermBackend::new(stdout);
     let mut terminal = Terminal::new(backend)?;
 
-    let mut evaluator = BinaryClsEvaluator::new(r#"test\sample_pred_file.csv"#)?;
+    let mut evaluator = BinaryClsEvaluator::new(&pred_file_path)?;
     evaluator.set_threshold(0.5)?;
 
     let app_result = App::new(evaluator).run(&mut terminal);
@@ -355,9 +357,9 @@ impl App {
         let chunks = Layout::default()
             .direction(ratatui::layout::Direction::Horizontal)
             .constraints([
-                Constraint::Percentage(30), // For category selection
-                Constraint::Percentage(30), // For sample list
-                Constraint::Percentage(40), // For sample details
+                Constraint::Percentage(10), // For category selection
+                Constraint::Percentage(40), // For sample list
+                Constraint::Percentage(50), // For sample details
             ])
             .split(area);
 
@@ -428,17 +430,22 @@ impl App {
     }
 
     fn handle_events(&mut self) -> std::io::Result<()> {
-        if let Event::Key(key) = event::read()? {
-            match key.code {
+        if let Event::Key(KeyEvent {
+            code,
+            kind: KeyEventKind::Press,
+            ..
+        }) = event::read()?
+        {
+            match code {
                 KeyCode::Char('q') | KeyCode::Esc => self.quit(),
                 KeyCode::Char('p') => self.previous_tab(),
                 KeyCode::Char('n') => self.next_tab(),
                 KeyCode::Left | KeyCode::Right => {
                     if self.selected_tab == SelectedTab::ReportViewer {
                         // Handle threshold adjustments in the ReportViewer tab
-                        self.handle_threshold_events(key.code);
+                        self.handle_threshold_events(code);
                     } else if self.selected_tab == SelectedTab::SampleViewer {
-                        if key.code == KeyCode::Left {
+                        if code == KeyCode::Left {
                             self.previous_category();
                         } else {
                             self.next_category();
@@ -447,7 +454,7 @@ impl App {
                 }
                 KeyCode::Up | KeyCode::Down => {
                     if self.selected_tab == SelectedTab::SampleViewer {
-                        if key.code == KeyCode::Up {
+                        if code == KeyCode::Up {
                             self.previous_sample();
                         } else {
                             self.next_sample();
