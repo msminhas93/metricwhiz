@@ -377,6 +377,10 @@ impl App {
     fn get_filtered_samples(&self, category: &str) -> Result<Vec<Sample>, PolarsError> {
         let lazy_df = self.evaluator.pred_df.clone().lazy();
 
+        // Debugging: Print the DataFrame before filtering
+        // let df = self.evaluator.pred_df.clone();
+        // println!("DataFrame before filtering:\n{:?}", df);
+
         let filter_condition = match category {
             "tp" => col("ground_truth")
                 .eq(lit(1))
@@ -402,18 +406,22 @@ impl App {
             ])
             .collect()?;
 
+        // Debugging: Print the filtered DataFrame
+        // println!("Filtered DataFrame:\n{:?}", filtered_df);
+
         let mut samples = Vec::new();
-        let mut row_buffer = polars::frame::row::Row::default(); // Use Row instead of Vec
+        let mut row_buffer =
+            polars::frame::row::Row::new(vec![AnyValue::Null; filtered_df.width()]); // Initialize Row with correct capacity
 
         for i in 0..filtered_df.height() {
             filtered_df.get_row_amortized(i, &mut row_buffer)?;
 
             // Debugging: Print the row contents
-            println!("Row {}: {:?}", i, row_buffer);
+            // println!("Row {}: {:?}", i, row_buffer);
 
             if row_buffer.0.len() >= 3 {
                 let ground_truth = match &row_buffer.0[0] {
-                    AnyValue::Int64(val) => *val,
+                    AnyValue::Int32(val) => *val as i64,
                     _ => {
                         eprintln!("Unexpected type for ground_truth in row {}", i);
                         0 // Default value or handle error
@@ -421,7 +429,7 @@ impl App {
                 };
 
                 let pred_label = match &row_buffer.0[1] {
-                    AnyValue::Int64(val) => *val,
+                    AnyValue::Int32(val) => *val as i64,
                     _ => {
                         eprintln!("Unexpected type for pred_label in row {}", i);
                         0 // Default value or handle error
