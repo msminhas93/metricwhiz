@@ -165,17 +165,25 @@ impl App {
         let size = f.area();
         let chunks = Layout::default()
             .direction(ratatui::layout::Direction::Vertical)
-            .constraints([Constraint::Length(3), Constraint::Min(0)].as_ref())
+            .constraints(
+                [
+                    Constraint::Length(3), // For tabs
+                    Constraint::Min(0),    // For main content
+                    Constraint::Length(3), // For tooltip
+                ]
+                .as_ref(),
+            )
             .split(size);
 
         let titles = SelectedTab::iter().map(|tab| {
             Line::from(Span::styled(
                 format!("{:?}", tab),
                 Style::default()
-                    .fg(Color::White)
+                    .fg(Color::Cyan)
                     .add_modifier(Modifier::BOLD),
             ))
         });
+
         let tabs = Tabs::new(titles)
             .select(self.selected_tab as usize)
             .block(Block::default().borders(Borders::ALL).title("Tabs"));
@@ -185,6 +193,16 @@ impl App {
             SelectedTab::ReportViewer => self.render_tab_0(f, chunks[1]),
             SelectedTab::SampleViewer => self.render_tab_1(f, chunks[1]),
         }
+
+        // Tooltip at the bottom
+        let tooltip_text = Text::from(Line::from(Span::styled(
+            "Press 'q' to quit, 'n' for next tab, 'p' for previous tab, ←/→ to adjust threshold or select sample category, ↑/↓ to navigate samples.",
+            Style::default().fg(Color::Cyan),
+        )));
+        let tooltip_paragraph = Paragraph::new(tooltip_text)
+            .block(Block::default().borders(Borders::ALL).title("Tooltip"))
+            .wrap(ratatui::widgets::Wrap { trim: true });
+        f.render_widget(tooltip_paragraph, chunks[2]);
     }
 
     fn render_tab_0(&mut self, f: &mut ratatui::Frame, area: Rect) {
@@ -214,7 +232,7 @@ impl App {
                     .borders(Borders::ALL)
                     .title("Threshold Selector"),
             )
-            .gauge_style(Style::default().fg(Color::Yellow))
+            .gauge_style(Style::default().fg(Color::Cyan))
             .ratio(threshold)
             .label(format!("{:.2}", threshold));
         f.render_widget(gauge, chunks[0]);
@@ -376,7 +394,7 @@ impl App {
             )
             .highlight_style(
                 Style::default()
-                    .fg(Color::Yellow)
+                    .fg(Color::Cyan)
                     .add_modifier(Modifier::BOLD),
             )
             .highlight_symbol(">>");
@@ -405,7 +423,7 @@ impl App {
             .block(Block::default().borders(Borders::ALL).title("Samples"))
             .highlight_style(
                 Style::default()
-                    .fg(Color::Yellow)
+                    .fg(Color::Cyan)
                     .add_modifier(Modifier::BOLD),
             )
             .highlight_symbol(">>");
