@@ -9,6 +9,9 @@ on:
       - main
   workflow_dispatch: # Allow manual triggering
 
+permissions:
+  contents: write # Required for creating releases and uploading assets
+
 jobs:
   build:
     runs-on: ${{ matrix.os }}
